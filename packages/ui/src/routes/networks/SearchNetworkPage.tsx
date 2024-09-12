@@ -56,7 +56,7 @@ const SearchNetworkPage = () => {
         run(searchChainsByTerm(value))
     }
 
-    const addOrEditNetwork = () => {
+    const addOrEditNetwork = async () => {
         const network = Object.values(availableNetworks).find(
             (network) =>
                 network.enable && network.chainId === pickedChain?.chain.chainId
@@ -130,12 +130,15 @@ const SearchNetworkPage = () => {
                     </PopupFooter>
                 ) : null
             }
+            submitOnEnter={{
+                onSubmit: addOrEditNetwork,
+                isEnabled: !!pickedChain,
+            }}
         >
             <div className="w-76 w-full p-6 pb-4 bg-white fixed z-20 flex flex-col">
                 <div className="flex flex-row space-x-2">
                     <div className="flex-1">
                         <SearchInput
-                            inputClassName="!h-12"
                             placeholder="Input Chain ID or Name..."
                             disabled={false}
                             autoFocus={true}

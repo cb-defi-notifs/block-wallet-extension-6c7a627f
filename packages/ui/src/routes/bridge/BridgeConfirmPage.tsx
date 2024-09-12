@@ -577,7 +577,7 @@ const BridgeConfirmPage: FunctionComponent<{}> = () => {
                 }}
                 clickOutsideToClose={false}
                 txHash={inProgressTransaction?.transactionParams.hash}
-                timeout={2900}
+                timeout={1500}
                 gifs={gifs}
                 onDone={useCallback(() => {
                     if (status === "error") {
@@ -601,6 +601,7 @@ const BridgeConfirmPage: FunctionComponent<{}> = () => {
                     setPersistedData,
                     clearTransaction,
                 ])}
+                showCloseButton
             />
             {quote && (
                 <BridgeDetails
@@ -756,7 +757,7 @@ const BridgeConfirmPage: FunctionComponent<{}> = () => {
                                 })
                         }}
                         className={classnames(
-                            "w-full ml-2",
+                            "!w-full ml-2 h-12 space-x-2 p-4",
                             !quote && "cursor-not-allowed hover:border-default"
                         )}
                     >

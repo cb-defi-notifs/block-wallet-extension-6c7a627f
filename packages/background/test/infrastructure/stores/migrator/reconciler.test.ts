@@ -195,6 +195,7 @@ const initialState: newBlankAppState = {
         isRefreshingAllowances: false,
         hiddenAccounts: {},
         accounts: {},
+        accountTokensOrder: {},
     },
     AppStateController: {
         idleTimeout: 5,
@@ -247,7 +248,7 @@ const initialState: newBlankAppState = {
             hideEstimatedGasExceedsThresholdWarning: false,
             hideDepositsExternalAccountsWarning: false,
             hideBridgeInsufficientNativeTokenWarning: false,
-            displayNetWorth: true
+            displayNetWorth: true,
         },
         releaseNotesSettings: {
             lastVersionUserSawNews: '0.1.3',
@@ -258,6 +259,8 @@ const initialState: newBlankAppState = {
         },
         defaultGasOption: 'medium',
         hotkeysEnabled: true,
+        tokensSortValue: 'CUSTOM',
+        hideSmallBalances: false,
     },
     TransactionController: {
         transactions: [],
@@ -383,6 +386,7 @@ describe('State reconciler', () => {
                     },
                 },
                 hiddenAccounts: {},
+                accountTokensOrder: {},
             },
             AppStateController: {
                 idleTimeout: 5,
@@ -486,7 +490,7 @@ describe('State reconciler', () => {
                     hideEstimatedGasExceedsThresholdWarning: false,
                     hideDepositsExternalAccountsWarning: false,
                     hideBridgeInsufficientNativeTokenWarning: false,
-                    displayNetWorth: true
+                    displayNetWorth: true,
                 },
                 releaseNotesSettings: {
                     lastVersionUserSawNews: '0.1.3',
@@ -497,6 +501,8 @@ describe('State reconciler', () => {
                 },
                 defaultGasOption: 'medium',
                 hotkeysEnabled: true,
+                tokensSortValue: 'CUSTOM',
+                hideSmallBalances: false,
             },
             TransactionController: {
                 transactions: [],

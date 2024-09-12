@@ -37,8 +37,11 @@ import {
     customHeadersForBlockWalletNode,
 } from '../utils/nodes';
 import { toChecksumAddress } from 'ethereumjs-util';
-import { SECOND } from '../utils/constants/time';
+import { MILISECOND, SECOND } from '../utils/constants/time';
 import { ProviderType } from '../utils/types/communication';
+import { _fetchFeeDataFromService } from './GasPricesController';
+import { isHttpsURL } from '../utils/http';
+import { BigNumber } from '@ethersproject/bignumber';
 
 export enum NetworkEvents {
     NETWORK_CHANGE = 'NETWORK_CHANGE',
@@ -62,6 +65,8 @@ export interface NetworkControllerState {
 
 const CHECK_PROVIDER_SCHEDULED_TIME = 5 * SECOND;
 const CHECK_PROVIDER_REQUEST_TIMEOUT = 10 * SECOND;
+
+export const NO_EIP_1559_NETWORKS = [280, 324, 30, 31, 42220, 534351, 534352];
 
 export default class NetworkController extends BaseController<NetworkControllerState> {
     public static readonly CURRENT_HARDFORK: string = 'london';
@@ -380,7 +385,7 @@ export default class NetworkController extends BaseController<NetworkControllerS
         const explorerUrl =
             getUrlWithoutTrailingSlash(updates.blockExplorerUrls) || '';
 
-        if (explorerUrl && explorerUrl.indexOf('https://') === -1) {
+        if (explorerUrl && !isHttpsURL(explorerUrl)) {
             throw new Error('Block explorer endpoint must be https');
         }
 
@@ -412,7 +417,10 @@ export default class NetworkController extends BaseController<NetworkControllerS
     /**
      * Add a new network manually to the list.
      */
-    public async addNetwork(network: AddNetworkType): Promise<void> {
+    public async addNetwork(
+        network: AddNetworkType,
+        switchToNetwork = false
+    ): Promise<void> {
         if (!network.chainId || Number.isNaN(network.chainId)) {
             throw new Error('ChainId is required and must be numeric.');
         }
@@ -457,7 +465,7 @@ export default class NetworkController extends BaseController<NetworkControllerS
                 )
             ) ||
             '';
-        if (explorerUrl && explorerUrl.indexOf('https://') === -1) {
+        if (explorerUrl && !isHttpsURL(explorerUrl)) {
             throw new Error('Block explorer endpoint must be https');
         }
 
@@ -476,9 +484,11 @@ export default class NetworkController extends BaseController<NetworkControllerS
         // Check that chainId matches with network's. If it doesnt match, throws an error.
         await validateNetworkChainId(network.chainId, rpcUrl);
 
+        let key: string;
+
         if (typeof existingNetwork !== 'undefined') {
             // Here we handle the nativelySupported networks which are disabled
-            const key = this._getNetworkKey(existingNetwork);
+            key = this._getNetworkKey(existingNetwork);
             const newNetworks = cloneDeep(this.networks);
             newNetworks[key].enable = true;
             newNetworks[key].currentRpcUrl = rpcUrl;
@@ -497,15 +507,15 @@ export default class NetworkController extends BaseController<NetworkControllerS
             this.networks = newNetworks;
         } else {
             // Set the network key
-            const key = `CHAIN-${network.chainId}`;
+            key = `CHAIN-${network.chainId}`;
 
             // Set the native currency icon to undefined if not found and we will use network icon instead in UI
             const nativeCurrencyIcon =
                 network.nativeCurrency?.logo ||
                 chainDataFromList?.nativeCurrencyIcon ||
-                nativeCurrencySymbol === 'ETH'
+                (nativeCurrencySymbol === 'ETH'
                     ? 'https://raw.githubusercontent.com/block-wallet/assets/master/blockchains/ethereum/info/logo.png'
-                    : undefined;
+                    : undefined);
 
             const networkIcon =
                 network.iconUrls?.[0] || chainDataFromList?.logo;
@@ -545,6 +555,10 @@ export default class NetworkController extends BaseController<NetworkControllerS
                 hasFixedGasCost: false,
                 etherscanApiUrl: chainDataFromList?.scanApi,
             };
+        }
+
+        if (switchToNetwork) {
+            this.setNetwork(key);
         }
     }
 
@@ -675,56 +689,87 @@ export default class NetworkController extends BaseController<NetworkControllerS
     public async getEIP1559Compatibility(
         chainId: number = this.network.chainId,
         forceUpdate = false,
+        baseFee: BigNumber | undefined = undefined,
         //required by parameter to avoid returning undefined if the user hasn't added the chain
         //previous check should be done before invoking this method.
         provider: JsonRpcProvider = this.getProvider()
     ): Promise<boolean> {
         let shouldFetchTheCurrentState = false;
 
-        if (!(chainId in this.getState().isEIP1559Compatible)) {
-            shouldFetchTheCurrentState = true;
-        } else {
-            if (this.getState().isEIP1559Compatible[chainId] === undefined) {
-                shouldFetchTheCurrentState = true;
-            } else {
-                if (forceUpdate) {
-                    shouldFetchTheCurrentState = true;
-                }
-            }
+        const isEIP1559Compatible: boolean | null =
+            this.getState().isEIP1559Compatible[chainId];
+
+        // Integrity check. We had cases where old states had a false value but the network was upgraded to EIP-1559.
+        // So, if we detect that the baseFee is inconsistent with the value we had, we force the update of the flag.
+        if (isEIP1559Compatible != null && !forceUpdate) {
+            forceUpdate =
+                (isEIP1559Compatible && baseFee === undefined) ||
+                (!isEIP1559Compatible && baseFee !== undefined);
         }
 
-        if (shouldFetchTheCurrentState) {
-            let baseFeePerGas = (await this.getLatestBlock(provider))
-                .baseFeePerGas;
+        shouldFetchTheCurrentState = isEIP1559Compatible == null || forceUpdate;
 
-            // detection for the fantom case,
-            // the network seems to be eip1559 but eth_feeHistory is not available.
-            if (baseFeePerGas) {
-                try {
-                    const feeHistory = await provider.send('eth_feeHistory', [
-                        '0x1',
-                        'latest',
-                        [50],
-                    ]);
-                    if (
-                        !feeHistory ||
-                        (!feeHistory.baseFeePerGas && !feeHistory.reward)
-                    ) {
-                        throw new Error(
-                            `eth_feeHistory is not fully supported by chain ${chainId}`
-                        );
+        if (shouldFetchTheCurrentState) {
+            // check: https://github.com/block-wallet/chain-fee-data-service/blob/main/domain/eth/service/service_impl.go#L425
+            if (NO_EIP_1559_NETWORKS.includes(chainId)) {
+                this.store.updateState({
+                    isEIP1559Compatible: {
+                        ...this.getState().isEIP1559Compatible,
+                        [chainId]: false,
+                    },
+                });
+            } else {
+                // check the response of the chain fee service
+                const feeDataResponse = await _fetchFeeDataFromService(
+                    chainId,
+                    10 * MILISECOND,
+                    1
+                );
+                if (
+                    feeDataResponse &&
+                    'baseFee' in feeDataResponse &&
+                    feeDataResponse.baseFee
+                ) {
+                    this.store.updateState({
+                        isEIP1559Compatible: {
+                            ...this.getState().isEIP1559Compatible,
+                            [chainId]: true,
+                        },
+                    });
+                } else {
+                    let baseFeePerGas = (await this.getLatestBlock(provider))
+                        .baseFeePerGas;
+
+                    // detection for the fantom case,
+                    // the network seems to be eip1559 but eth_feeHistory is not available.
+                    if (baseFeePerGas) {
+                        try {
+                            const feeHistory = await provider.send(
+                                'eth_feeHistory',
+                                ['0x1', 'latest', [50]]
+                            );
+                            if (
+                                !feeHistory ||
+                                (!feeHistory.baseFeePerGas &&
+                                    !feeHistory.reward)
+                            ) {
+                                throw new Error(
+                                    `eth_feeHistory is not fully supported by chain ${chainId}`
+                                );
+                            }
+                        } catch {
+                            baseFeePerGas = undefined;
+                        }
                     }
-                } catch {
-                    baseFeePerGas = undefined;
+
+                    this.store.updateState({
+                        isEIP1559Compatible: {
+                            ...this.getState().isEIP1559Compatible,
+                            [chainId]: !!baseFeePerGas,
+                        },
+                    });
                 }
             }
-
-            this.store.updateState({
-                isEIP1559Compatible: {
-                    ...this.getState().isEIP1559Compatible,
-                    [chainId]: !!baseFeePerGas,
-                },
-            });
         }
 
         return this.getState().isEIP1559Compatible[chainId];

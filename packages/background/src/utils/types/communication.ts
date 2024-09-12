@@ -25,8 +25,10 @@ import { ImportStrategy, ImportArguments } from '../account';
 import {
     SwapParameters,
     ExchangeType,
-    SwapQuote,
+    SwapQuoteResponse,
     SwapTransaction,
+    SwapQuoteParams,
+    SwapRequestParams,
 } from '../../controllers/SwapController';
 import {
     ProviderEvents,
@@ -50,7 +52,6 @@ import {
 import { TransactionFeeData } from '@block-wallet/background/controllers/erc-20/transactions/SignedTransaction';
 import { Currency } from '../currency';
 import { Devices } from './hardware';
-import { OneInchSwapQuoteParams, OneInchSwapRequestParams } from './1inch';
 import { ChainListItem } from '@block-wallet/chains-assets';
 import { IChain } from './chain';
 import {
@@ -63,7 +64,9 @@ import {
 import { GasPriceData } from '@block-wallet/background/controllers/GasPricesController';
 import { RemoteConfigsControllerState } from '@block-wallet/background/controllers/RemoteConfigsController';
 import { TypedTransaction } from '@ethereumjs/tx';
+import browser from 'webextension-polyfill';
 import { GetOnRampCurrencies } from '@block-wallet/background/controllers/OnrampController';
+import { SwapTxMeta } from '../swaps/1inch';
 
 enum ACCOUNT {
     CREATE = 'CREATE_ACCOUNT',
@@ -80,6 +83,9 @@ enum ACCOUNT {
     REFRESH_TOKEN_ALLOWANCES = 'REFRESH_TOKEN_ALLOWANCES',
     UNHIDE = 'UNHIDE_ACCOUNT',
     GET_NATIVE_TOKEN_BALANCE = 'GET_NATIVE_TOKEN_BALANCE',
+    EDIT_ACCOUNT_TOKENS_ORDER = 'EDIT_ACCOUNT_TOKENS_ORDER',
+    SET_ACCOUNT_SORT_VALUE = 'SET_ACCOUNT_SORT_VALUE',
+    ORDER_ACCOUNTS = 'ORDER_ACCOUNTS',
 }
 
 enum ADDRESS {
@@ -197,6 +203,7 @@ enum TRANSACTION {
     GET_SEND_TRANSACTION_RESULT = 'GET_SEND_TRANSACTION_RESULT',
     CALCULATE_SEND_TRANSACTION_GAS_LIMIT = 'CALCULATE_SEND_TRANSACTION_GAS_LIMIT',
     CALCULATE_APPROVE_TRANSACTION_GAS_LIMIT = 'CALCULATE_APPROVE_TRANSACTION_GAS_LIMIT',
+    CALCULATE_SWAP_TRANSACTION_GAS_LIMIT = 'CALCULATE_SWAP_TRANSACTION_GAS_LIMIT',
     CONFIRM = 'CONFIRM_TRANSACTION',
     REJECT = 'REJECT_TRANSACTION',
     UPDATE_STATUS = 'UPDATE_STATUS',
@@ -245,6 +252,7 @@ enum WALLET {
     SET_HOTKEYS_ENABLED = 'SET_HOTKEYS_ENABLED',
     //onramp
     GET_ONRAMP_CURRENCIES = 'GET_ONRAMP_CURRENCIES',
+    SET_HIDESMALLBALANCES = 'SET_HIDESMALLBALANCES',
 }
 
 enum TOKEN {
@@ -333,6 +341,9 @@ export interface RequestSignatures {
         number,
         BigNumber | undefined
     ];
+    [Messages.ACCOUNT.EDIT_ACCOUNT_TOKENS_ORDER]: [RequestTokensOrder, void];
+    [Messages.ACCOUNT.SET_ACCOUNT_SORT_VALUE]: [string, void];
+    [Messages.ACCOUNT.ORDER_ACCOUNTS]: [RequestOrderAccounts, void];
     [Messages.APP.GET_IDLE_TIMEOUT]: [undefined, number];
     [Messages.APP.SET_IDLE_TIMEOUT]: [RequestSetIdleTimeout, void];
     [Messages.APP.SET_LAST_USER_ACTIVE_TIME]: [undefined, void];
@@ -356,7 +367,7 @@ export interface RequestSignatures {
         boolean
     ];
     [Messages.EXCHANGE.APPROVE]: [RequestApproveExchange, boolean];
-    [Messages.EXCHANGE.GET_QUOTE]: [RequestGetExchangeQuote, SwapQuote];
+    [Messages.EXCHANGE.GET_QUOTE]: [RequestGetExchangeQuote, SwapQuoteResponse];
     [Messages.EXCHANGE.GET_EXCHANGE]: [RequestGetExchange, SwapParameters];
     [Messages.EXCHANGE.GET_SPENDER]: [RequestGetExchangeSpender, string];
     [Messages.EXCHANGE.EXECUTE]: [RequestExecuteExchange, string];
@@ -472,6 +483,10 @@ export interface RequestSignatures {
     ];
     [Messages.TRANSACTION.CALCULATE_SEND_TRANSACTION_GAS_LIMIT]: [
         RequestCalculateSendTransactionGasLimit,
+        TransactionGasEstimation
+    ];
+    [Messages.TRANSACTION.CALCULATE_SWAP_TRANSACTION_GAS_LIMIT]: [
+        RequestCalculateSwapTransactionGasLimit,
         TransactionGasEstimation
     ];
     [Messages.TRANSACTION.CANCEL_TRANSACTION]: [RequestCancelTransaction, void];
@@ -593,6 +608,10 @@ export interface RequestSignatures {
     ];
     [Messages.WALLET.SET_HOTKEYS_ENABLED]: [RequestSetHotkeys, void];
     [Messages.WALLET.GET_ONRAMP_CURRENCIES]: [void, GetOnRampCurrencies];
+    [Messages.WALLET.SET_HIDESMALLBALANCES]: [
+        RequestSetHideSmallBalances,
+        void
+    ];
 }
 
 export type MessageTypes = keyof RequestSignatures;
@@ -705,12 +724,12 @@ export interface RequestApproveExchange {
 
 export interface RequestGetExchangeQuote {
     exchangeType: ExchangeType;
-    quoteParams: OneInchSwapQuoteParams;
+    quoteParams: SwapQuoteParams;
 }
 
 export interface RequestGetExchange {
     exchangeType: ExchangeType;
-    exchangeParams: OneInchSwapRequestParams;
+    exchangeParams: SwapRequestParams;
 }
 
 export interface RequestGetExchangeSpender {
@@ -773,6 +792,8 @@ export interface RequestAddNetwork {
     currencySymbol: string;
     blockExplorerUrl: string;
     test: boolean;
+    // Flag to indicate if we should switch to the added/edited network after saving changes.
+    switchToNetwork: boolean;
 }
 
 export interface RequestEditNetwork {
@@ -992,6 +1013,10 @@ export interface RequestCalculateApproveTransactionGasLimit {
     amount: BigNumber | 'UNLIMITED';
 }
 
+export interface RequestCalculateSwapTransactionGasLimit {
+    tx: SwapTxMeta;
+}
+
 export interface RequestCalculateSendTransactionGasLimit {
     address: string;
     to: string;
@@ -1170,12 +1195,17 @@ export interface WindowTransportResponseMessage
     origin: Origin;
 }
 
-export interface SubmitQRHardwareCryptoHDKeyOrAccountMessage {
-    qr: string;
+export interface URParameter {
+    type: string;
+    cbor: string;
 }
+export interface SubmitQRHardwareCryptoHDKeyOrAccountMessage {
+    ur: URParameter;
+}
+
 export interface SubmitQRHardwareSignatureMessage {
     requestId: string;
-    qr: string;
+    ur: URParameter;
 }
 export interface CancelQRHardwareSignRequestMessage {}
 
@@ -1194,7 +1224,7 @@ export enum Origin {
 }
 
 export interface ExtensionInstances {
-    [id: string]: { port: chrome.runtime.Port };
+    [id: string]: { port: browser.Runtime.Port };
 }
 
 export interface ProviderInstances {
@@ -1202,7 +1232,7 @@ export interface ProviderInstances {
 }
 
 export interface ProviderInstance {
-    port: chrome.runtime.Port;
+    port: browser.Runtime.Port;
     tabId: number;
     windowId: number;
     origin: string;
@@ -1227,5 +1257,17 @@ export enum BackgroundActions {
 }
 
 export interface RequestSetHotkeys {
+    enabled: boolean;
+}
+
+export interface RequestTokensOrder {
+    [tokenAddress: string]: number;
+}
+
+export interface RequestOrderAccounts {
+    accountsInfo: AccountInfo[];
+}
+
+export interface RequestSetHideSmallBalances {
     enabled: boolean;
 }

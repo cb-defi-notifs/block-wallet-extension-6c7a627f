@@ -20,8 +20,11 @@ import classnames from "classnames"
 import { useOnMountHistory } from "../../context/hooks/useOnMount"
 import { HARDWARE_TYPES } from "../../util/account"
 import { openHardwareRemove } from "../../context/commActions"
+import browser from "webextension-polyfill"
 import { useHotkeys } from "react-hotkeys-hook"
 import { componentsHotkeys } from "../../util/hotkeys"
+import accounts_order from "../../assets/images/icons/accounts_order.svg"
+import assets_order from "../../assets/images/icons/assets_order.svg"
 
 const AccountMenu = () => {
     const { availableNetworks, selectedNetwork, hotkeysEnabled } =
@@ -69,7 +72,7 @@ const AccountMenu = () => {
     const accountMenuHotkeys = componentsHotkeys.AccountMenu
     useHotkeys(accountMenuHotkeys, () => {
         if (!hotkeysEnabled) return
-        chrome.tabs.create({
+        browser.tabs.create({
             url: generateExplorerLink(
                 availableNetworks,
                 selectedNetwork,
@@ -109,6 +112,18 @@ const AccountMenu = () => {
     })
 
     options.push({
+        icon: assets_order,
+        label: "Assets order",
+        to: "/accounts/menu/tokensOrder",
+    })
+
+    options.push({
+        icon: accounts_order,
+        label: "Acounts Order",
+        to: "/accounts/menu/order",
+    })
+
+    options.push({
         icon: resetIcon,
         label: "Reset Account",
         to: "/accounts/menu/reset",
@@ -126,6 +141,7 @@ const AccountMenu = () => {
                                 : "/settings",
                         })
                     }}
+                    networkIndicator
                 />
             }
         >
@@ -164,7 +180,9 @@ const AccountMenu = () => {
                             onChange={(option) =>
                                 option.to
                                     ? option.to.includes("https://")
-                                        ? chrome.tabs.create({ url: option.to })
+                                        ? browser.tabs.create({
+                                              url: option.to,
+                                          })
                                         : history.push({
                                               pathname: option.to,
                                               state: {
